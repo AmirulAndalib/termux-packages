@@ -2,7 +2,7 @@
 termux_github_api_get_tag() {
 	if [[ -z "$1" ]]; then
 		termux_error_exit <<-EndOfUsage
-			Usage: ${FUNCNAME[0]} PKG_SRCURL [TAG_TYPE [FILTER_REGEX]]
+			Usage: ${FUNCNAME[0]} project [tag_type] [filter_regex]?
 			Returns the latest tag of the given package.
 		EndOfUsage
 	fi
@@ -12,27 +12,10 @@ termux_github_api_get_tag() {
 		termux_error_exit "GITHUB_TOKEN environment variable not set."
 	fi
 
-	local PKG_SRCURL="$1"
-	local TAG_TYPE="${2:-}"
-	local FILTER_REGEX="${3:-}"
+	local project="$1" tag_type="$2" filter_regex="$3"
 
-	local project
-	project="$(echo "${PKG_SRCURL}" | cut -d'/' -f4-5)"
-	project="${project#git+}"
-
-	if [[ -z "${TAG_TYPE}" ]]; then # If not set, then decide on the basis of url.
-		if [[ "${PKG_SRCURL:0:4}" == "git+" ]]; then
-			# Get newest tag.
-			TAG_TYPE="newest-tag"
-		else
-			# Get the latest release tag.
-			TAG_TYPE="latest-release-tag"
-		fi
-	fi
-	if [[ -n "${FILTER_REGEX}" && "${TAG_TYPE}" != "latest-regex" ]]; then
-		termux_error_exit <<-EndOfError
-		ERROR: You can only specify a regex with TAG_TYPE="latest-regex"
-		EndOfError
+	if [[ -n "${filter_regex}" && "${tag_type}" != "latest-regex" ]]; then
+		termux_error_exit "You can only specify a filter regex with tag_type=latest-regex"
 	fi
 
 	local jq_filter
@@ -47,7 +30,7 @@ termux_github_api_get_tag() {
 		--write-out '|%{http_code}'
 	)
 
-	if [[ "${TAG_TYPE}" == "newest-tag" ]]; then
+	if [[ "${tag_type}" == "newest-tag" ]]; then
 		# We use graphql intensively so we should slowdown our requests to avoid hitting github ratelimits.
 		sleep 1
 
@@ -77,19 +60,18 @@ termux_github_api_get_tag() {
 			)"
 		)
 
-	elif [[ "${TAG_TYPE}" == "latest-release-tag" ]]; then
+	elif [[ "${tag_type}" == "latest-release-tag" ]]; then
 		api_url="${api_url}/repos/${project}/releases/latest"
 		jq_filter=".tag_name"
-	elif [[ "${TAG_TYPE}" == "latest-regex" ]]; then
+	elif [[ "${tag_type}" == "latest-regex" ]]; then
 		api_url="${api_url}/repos/${project}/releases"
 		jq_filter=".[].tag_name"
 	else
 		termux_error_exit <<-EndOfError
-			ERROR: Invalid TAG_TYPE: '${TAG_TYPE}'.
-			Allowed values: 'newest-tag', 'latest-release-tag'.
+			ERROR: Invalid tag_type: '${tag_type}'.
+			Allowed values: 'newest-tag', 'latest-release-tag', 'latest-regex'.
 		EndOfError
 	fi
-
 
 	local response
 	response="$(curl "${curl_opts[@]}" "${api_url}")"
@@ -101,29 +83,22 @@ termux_github_api_get_tag() {
 
 	local tag_name
 	if [[ "${http_code}" == "200" ]]; then
-		if [[ "${FILTER_REGEX}" ]]; then
-			if jq --exit-status --raw-output "${jq_filter}" <<<"${response}" >/dev/null; then
-				tag_name="$(jq --exit-status --raw-output "${jq_filter}" <<<"${response}" \
-					| sed 's/^v//' | grep -P "${FILTER_REGEX}" | head -n 1)"
-				if [[ -z "${tag_name}" ]]; then
-					termux_error_exit "No tags matched regex '${FILTER_REGEX}' in '${response}'"
-				fi
-			else
-				termux_error_exit "Failed to parse tag name from: '${response}'"
+		if jq --exit-status --raw-output "${jq_filter}" <<<"${response}" >/dev/null; then
+			tag_name="$(jq --exit-status --raw-output "${jq_filter}" <<<"${response}")"
+			tag_name="${tag_name#v}" # Remove leading 'v' which is common in version tag.
+			if [[ -n "${filter_regex}" ]]; then
+				tag_name="$(grep -P "${filter_regex}" <<<"$tag_name" | head -n 1)"
+				[[ -z "${tag_name}" ]] && termux_error_exit "No tags matched regex '${filter_regex}' in '${response}'"
 			fi
 		else
-			if jq --exit-status --raw-output "${jq_filter}" <<<"${response}" >/dev/null; then
-				tag_name="$(jq --exit-status --raw-output "${jq_filter}" <<<"${response}")"
-			else
-				termux_error_exit "Failed to parse tag name from: '${response}'"
-			fi
+			termux_error_exit "Failed to parse tag name from: '${response}'"
 		fi
 	elif [[ "${http_code}" == "404" ]]; then
 		if jq --exit-status "has(\"message\") and .message == \"Not Found\"" <<<"${response}"; then
 			termux_error_exit <<-EndOfError
-				ERROR: No '${TAG_TYPE}' found (${api_url}).
+				ERROR: No '${tag_type}' found (${api_url}).
 					Try using '$(
-					if [ "${TAG_TYPE}" = "newest-tag" ]; then
+					if [ "${tag_type}" = "newest-tag" ]; then
 						echo "latest-release-tag"
 					else
 						echo "newest-tag"
@@ -132,14 +107,14 @@ termux_github_api_get_tag() {
 			EndOfError
 		else
 			termux_error_exit <<-EndOfError
-				ERROR: Failed to get '${TAG_TYPE}'(${api_url})'.
+				ERROR: Failed to get '${tag_type}'(${api_url})'.
 				Response:
 				${response}
 			EndOfError
 		fi
 	else
 		termux_error_exit <<-EndOfError
-			ERROR: Failed to get '${TAG_TYPE}'(${api_url})'.
+			ERROR: Failed to get '${tag_type}'(${api_url})'.
 			HTTP code: ${http_code}
 			Response:
 			${response}
@@ -149,12 +124,12 @@ termux_github_api_get_tag() {
 	# If program control reached here and still no tag_name, then something went wrong.
 	if [[ -z "${tag_name:-}" ]] || [[ "${tag_name}" == "null" ]]; then
 		termux_error_exit <<-EndOfError
-			ERROR: JQ could not find '${TAG_TYPE}'(${api_url})'.
+			ERROR: JQ could not find '${tag_type}'(${api_url})'.
 			Response:
 			${response}
 			Please report this as bug.
 		EndOfError
 	fi
 
-	echo "${tag_name#v}" # Remove leading 'v' which is common in version tag.
+	echo "${tag_name}"
 }

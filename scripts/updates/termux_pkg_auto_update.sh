@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 termux_pkg_auto_update() {
 	if [[ -n "${__CACHED_TAG:-}" ]]; then
-		termux_pkg_upgrade_version ${__CACHED_TAG}
+		termux_pkg_upgrade_version "${__CACHED_TAG}"
 		return $?
 	fi
 
@@ -18,20 +18,17 @@ termux_pkg_auto_update() {
 		fi
 	fi
 
-	local _err_msg="ERROR: source url's hostname is not ${TERMUX_PKG_UPDATE_METHOD}.com, but has been
-configured to use ${TERMUX_PKG_UPDATE_METHOD}'s method."
-
 	case "${TERMUX_PKG_UPDATE_METHOD}" in
 	github)
-		if [[ "${project_host}" != "${TERMUX_PKG_UPDATE_METHOD}.com" ]]; then
-			termux_error_exit "${_err_msg}"
+		if [[ "${project_host}" != "github.com" ]]; then
+			termux_error_exit "package does not seems to be hosted on github.com, but has been configured to use it's method."
 		else
 			termux_github_auto_update
 		fi
 		;;
 	gitlab)
-		if [[ "${project_host}" != "${TERMUX_PKG_UPDATE_METHOD}.com" ]]; then
-			termux_error_exit "${_err_msg}"
+		if [[ "${project_host}" != "${TERMUX_GITLAB_API_HOST}" ]]; then
+			termux_error_exit "package does not seems to be hosted on ${TERMUX_GITLAB_API_HOST}, but has been configured to use it's method."
 		else
 			termux_gitlab_auto_update
 		fi

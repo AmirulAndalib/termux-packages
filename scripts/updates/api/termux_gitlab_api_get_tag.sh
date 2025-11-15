@@ -25,6 +25,10 @@ termux_gitlab_api_get_tag() {
 		fi
 	fi
 
+	if [[ -n "${FILTER_REGEX}" && "${TAG_TYPE}" != "latest-regex" ]]; then
+		termux_error_exit "You can only specify a regex with TAG_TYPE=latest-regex"
+	fi
+
 	local jq_filter
 	local api_path
 
@@ -37,10 +41,14 @@ termux_gitlab_api_get_tag() {
 		api_path="/repository/tags"
 		jq_filter=".[0].name"
 		;;
+	latest-regex)
+		api_path="/releases"
+		jq_filter=".[].tag_name"
+		;;
 	*)
 		termux_error_exit <<-EndOfError
 			ERROR: Invalid TAG_TYPE: '${TAG_TYPE}'.
-			Allowed values: 'newest-tag', 'latest-release-tag'.
+			Allowed values: 'newest-tag', 'latest-release-tag', latest-regex'.
 		EndOfError
 		;;
 	esac
@@ -67,6 +75,11 @@ termux_gitlab_api_get_tag() {
 	if [[ "${http_code}" == "200" ]]; then
 		if jq --exit-status --raw-output "${jq_filter}" <<<"${response}" >/dev/null; then
 			tag_name="$(jq --exit-status --raw-output "${jq_filter}" <<<"${response}")"
+			tag_name="${tag_name#v}" # Remove leading 'v' which is common in version tag.
+			if [[ -n "${FILTER_REGEX}" ]]; then
+				tag_name="$(grep -P "${FILTER_REGEX}" <<<"$tag_name" | head -n 1)"
+				[[ -z "${tag_name}" ]] && termux_error_exit "No tags matched regex '${FILTER_REGEX}' in '${response}'"
+			fi
 		else
 			termux_error_exit "Failed to parse tag name from: '${response}'"
 		fi
@@ -75,7 +88,7 @@ termux_gitlab_api_get_tag() {
 			termux_error_exit <<-EndOfError
 				ERROR: No '${TAG_TYPE}' found. (${api_url})
 				Try using '$(
-					if [ ${TAG_TYPE} = "newest-tag" ]; then
+					if [[ "${TAG_TYPE}" == "newest-tag" ]]; then
 						echo "latest-release-tag"
 					else
 						echo "newest-tag"
@@ -108,5 +121,5 @@ termux_gitlab_api_get_tag() {
 		EndOfError
 	fi
 
-	echo "${tag_name#v}" # Strip leading 'v'.
+	echo "${tag_name}"
 }
